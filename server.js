@@ -2,6 +2,8 @@ const express = require("express");
 const cors = require("cors");
 const fs = require("fs");
 require("dotenv").config();
+const { generateFollowUp } = require("./openai");
+
 
 const { analyzeImage } = require("./openai");
 

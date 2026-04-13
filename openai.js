@@ -5,42 +5,62 @@ const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+// ================== RULES ==================
 const QualificationRules = {
   OFFICE: `MUST SEE:
-  - People working at desks
-  - Computers, monitors, keyboards
-  - Office furniture (chairs, desks)
-  - Indoor setting with typical office lighting`,
+  - Desk
+  - Laptop or monitor
+  - Chair
+  - Indoor working setup`,
 };
 
+// ================== TYPE MAP ==================
+const typeMap = {
+  "Office Area": "OFFICE",
+  OFFICE: "OFFICE",
+};
+
+// ================== MAIN FUNCTION ==================
 async function analyzeImage(base64Image, type = "OFFICE") {
   try {
+    const mappedType = typeMap[type] || "OFFICE";
+    const rules = QualificationRules[mappedType];
+
     const prompt = `
-                  You are a STRICT AI validator.
+You are an advanced AI vision inspector.
 
-                  TARGET: ${type}
+TASK:
+1. Detect real objects in the image
+2. Detect visible brands/logos (Apple, Dell, HP, Lenovo etc.)
+3. Evaluate cleanliness (clean / slightly messy / messy)
+4. Validate against TARGET
 
-                  RULES:
-                  ${QualificationRules[type]}
-                  Reject If Not Found or unclear.
+TARGET: ${mappedType}
 
-                  CRITICAL:
-                  - DO NOT ask questions
-                  - DO NOT hallucinate
-                  - DO NOT guess extra things
-                  - ONLY describe visible facts
-                  - If unclear → NO
+RULES:
+${rules}
 
-                  OUTPUT STRICT JSON:
-                  {
-                    "result": "YES" or "NO",
-                    "message": "short instruction",
-                    "confidence": 0-1
-                  }
-                  `;
+CRITICAL:
+- Observations must be REAL objects (laptop, desk, chair, bed etc.)
+- Do NOT use abstract words like "setup", "environment"
+- Brands only if logo clearly visible
+- Cleanliness based on clutter
+- DO NOT mention any score
+
+OUTPUT JSON ONLY:
+{
+  "result": "YES" or "NO",
+  "observations": ["objects"],
+  "brands": ["detected brands"],
+  "cleanliness": "clean | slightly messy | messy",
+  "missing": ["missing items"],
+  "confidence": 0-1
+}
+`;
 
     const response = await client.chat.completions.create({
       model: "gpt-4o-mini",
+      temperature: 0.2,
       messages: [
         { role: "system", content: prompt },
         {
@@ -54,30 +74,77 @@ async function analyzeImage(base64Image, type = "OFFICE") {
           ],
         },
       ],
-      max_tokens: 80,
+      max_tokens: 150,
     });
 
     const raw = response.choices[0].message.content;
-    console.log("GPT:", raw);
+    console.log("GPT RAW:", raw);
 
-    const json = raw.match(/\{.*\}/s);
-    if (!json) throw new Error("Invalid JSON");
+    // ================== SAFE PARSE ==================
+    let parsed;
 
-    const parsed = JSON.parse(json[0]);
+    try {
+      const match = raw.match(/\{[\s\S]*?\}/);
+      if (!match) throw new Error("No JSON");
+
+      parsed = JSON.parse(match[0]);
+    } catch (err) {
+      return fallback();
+    }
+
+    // ================== CLEAN OBSERVATIONS ==================
+    const invalidWords = ["setup", "environment", "workspace"];
+
+    parsed.observations = (parsed.observations || []).filter(
+      (o) => !invalidWords.some((w) => o.toLowerCase().includes(w))
+    );
+
+    if (!parsed.observations.length) {
+      parsed.observations = ["unclear objects"];
+    }
+
+    // ================== DEFAULTS ==================
+    const brands = parsed.brands || [];
+    const cleanliness = parsed.cleanliness || "unknown";
+    const missing = parsed.missing || [];
+
+    // ================== 🔥 FINAL MESSAGE ==================
+    let message;
+
+    if (parsed.result === "YES") {
+      message = `I can see ${parsed.observations.join(", ")}. ${
+        brands.length ? `I also notice ${brands.join(", ")} devices. ` : ""
+      }Your workspace looks ${cleanliness}.`;
+    } else {
+      message = `I can see ${parsed.observations.join(", ")}. Please show ${
+        missing.join(", ") || "your office setup clearly"
+      }.`;
+    }
 
     return {
       status: parsed.result === "YES" ? "ok" : "retry",
-      message: parsed.message,
-      confidence: parsed.confidence,
+      message,
+      observations: parsed.observations,
+      brands,
+      cleanliness,
+      confidence: parsed.confidence || 0,
     };
   } catch (err) {
     console.error(err.message);
-    return {
-      status: "retry",
-      message: "Adjust camera and show clearly",
-      confidence: 0,
-    };
+    return fallback();
   }
+}
+
+// ================== FALLBACK ==================
+function fallback() {
+  return {
+    status: "retry",
+    message: "Please adjust the camera and show your workspace clearly",
+    observations: [],
+    brands: [],
+    cleanliness: "unknown",
+    confidence: 0,
+  };
 }
 
 module.exports = { analyzeImage };
