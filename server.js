@@ -5,7 +5,13 @@ const path    = require("path");
 const multer  = require("multer");
 require("dotenv").config();
 
-const { analyzeImage, transcribeAudio, generateProbe, generateAcknowledgement } = require("./openai");
+const {
+  analyzeImage,
+  transcribeAudio,
+  generateProbe,
+  generateAcknowledgement,
+  textToSpeech,
+} = require("./openai");
 
 const app    = express();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -31,6 +37,27 @@ app.post("/transcribe", upload.single("audio"), async (req, res) => {
   } catch (err) {
     console.error("Transcribe error:", err.message);
     res.status(500).json({ transcript: "", error: err.message });
+  }
+});
+
+// ─── 🔊 TEXT TO SPEECH ───────────────────────────────────────────────────────
+// Returns mp3 audio buffer — used by frontend Audio element (works on mobile)
+app.post("/speak", async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text) return res.status(400).json({ error: "No text" });
+
+    const audioBuffer = await textToSpeech(text);
+
+    res.set({
+      "Content-Type":   "audio/mpeg",
+      "Content-Length": audioBuffer.length,
+      "Cache-Control":  "no-cache",
+    });
+    res.send(audioBuffer);
+  } catch (err) {
+    console.error("TTS error:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -66,18 +93,12 @@ app.post("/save", (req, res) => {
 });
 
 // ─── 💾 SAVE TRANSCRIPT ───────────────────────────────────────────────────────
-// Mode A — { entries: [{question, answer}] }
-//   → appends entries to transcripts.json as they happen (voice steps)
-//
-// Mode B — { age, gender, transcript: [...], completedAt }
-//   → saves sessions/<timestamp>.json  (JSON archive)
-//   → saves data/transcript_<timestamp>.txt  (human-readable, one per session)
-//   → appends to all_sessions.json
-//
+// Mode A — { entries: [{question, answer}] }  → appends live to transcripts.json
+// Mode B — { age, gender, transcript, completedAt } → saves full session files
 app.post("/save-transcript", (req, res) => {
   const { entries, age, gender, transcript, completedAt } = req.body;
 
-  // ── Mode A: live voice entries ──
+  // Mode A
   if (entries && Array.isArray(entries)) {
     entries.forEach((e) =>
       appendToJSON("transcripts.json", {
@@ -86,38 +107,33 @@ app.post("/save-transcript", (req, res) => {
         time:     new Date(),
       })
     );
-    console.log(`📝 Appended ${entries.length} voice entries to transcripts.json`);
+    console.log(`📝 Saved ${entries.length} voice entries`);
     return res.json({ ok: true });
   }
 
-  // ── Mode B: full session on completion ──
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const session   = { age, gender, completedAt, transcript };
-
-  // JSON archive
-  ensureDir("sessions");
-  const jsonFile = path.join("sessions", `session_${timestamp}.json`);
-  fs.writeFileSync(jsonFile, JSON.stringify(session, null, 2), "utf8");
-
-  // Rolling log
-  appendToJSON("all_sessions.json", session);
-
-  // ── Human-readable .txt in data/ ──
-  ensureDir("data");
-  const txtFile = path.join("data", `transcript_${timestamp}.txt`);
+  // Mode B
+  const timestamp  = new Date().toISOString().replace(/[:.]/g, "-");
+  const session    = { age, gender, completedAt, transcript };
   const txtContent = buildTxt(age, gender, completedAt, transcript);
   const filename   = `transcript_${timestamp}.txt`;
-  fs.writeFileSync(txtFile, txtContent, "utf8");
 
-  console.log(`✅ Session saved → ${jsonFile}`);
-  console.log(`📄 Transcript  → ${txtFile}`);
+  ensureDir("sessions");
+  fs.writeFileSync(
+    path.join("sessions", `session_${timestamp}.json`),
+    JSON.stringify(session, null, 2),
+    "utf8"
+  );
 
-  // Return txt content so the client can offer a direct download
-  res.json({ ok: true, jsonFile, txtFile, txtContent, filename });
+  ensureDir("data");
+  fs.writeFileSync(path.join("data", filename), txtContent, "utf8");
+
+  appendToJSON("all_sessions.json", session);
+
+  console.log(`✅ Session + transcript saved (${timestamp})`);
+  res.json({ ok: true, txtContent, filename });
 });
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
-
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
@@ -134,7 +150,9 @@ function appendToJSON(filepath, entry) {
 function buildTxt(age, gender, completedAt, transcript) {
   const divider = "═".repeat(55);
   const thin    = "─".repeat(55);
-  const date    = new Date(completedAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+  const date    = new Date(completedAt).toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+  });
 
   const lines = [
     divider,
@@ -160,6 +178,5 @@ function buildTxt(age, gender, completedAt, transcript) {
   return lines.join("\n");
 }
 
-// ─── START ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`✅ Backend running on port ${PORT}`));
