@@ -5,8 +5,6 @@ require("dotenv").config();
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // ─── ANALYZE IMAGE ────────────────────────────────────────────────────────────
-// Fully dynamic — the prompt is built from the actual survey question and target,
-// so it works for any camera step without hardcoded rules.
 async function analyzeImage(base64Image, target, surveyQuestion) {
   try {
     const prompt = `
@@ -31,7 +29,6 @@ CRITICAL RULES:
 - brands = only if clearly visible logo in the frame, otherwise empty array
 - Do NOT evaluate or mention cleanliness
 - hint = only needed when result is NO. Keep it under 20 words. Sound warm and human.
-  e.g. "Could you tilt down a bit? I want to see the desk surface."
 - confidence = your confidence that the image matches the target (0.0 to 1.0)
 
 OUTPUT STRICTLY JSON ONLY — no markdown, no extra text:
@@ -73,7 +70,6 @@ OUTPUT STRICTLY JSON ONLY — no markdown, no extra text:
       return fallback();
     }
 
-    // Strip abstract words
     const invalidWords = ["setup", "environment", "workspace", "area", "space"];
     parsed.observations = (parsed.observations || []).filter(
       (o) => !invalidWords.some((w) => o.toLowerCase().includes(w))
@@ -85,7 +81,6 @@ OUTPUT STRICTLY JSON ONLY — no markdown, no extra text:
     const hint    = parsed.hint    || "";
 
     if (parsed.result === "YES") {
-      // Build clean transcript answer — no cleanliness
       const transcriptAnswer = [
         `Observed: ${parsed.observations.join(", ")}.`,
         brands.length ? `Brands visible: ${brands.join(", ")}.` : "",
@@ -146,7 +141,7 @@ async function generateProbe(originalQuestion, userAnswer) {
       messages: [
         {
           role: "system",
-          content: `You are a warm, curious UX researcher having a natural conversation during a user study. You genuinely care about what the participant is saying.
+          content: `You are a warm, curious UX researcher having a natural conversation during a user study.
 
 Given a survey question and their answer, write ONE follow-up probe question.
 
@@ -178,8 +173,6 @@ Output ONLY the probe question. Nothing else.`,
 }
 
 // ─── GENERATE ACKNOWLEDGEMENT ─────────────────────────────────────────────────
-// Called after the probe answer is received.
-// Returns a short, warm, human-sounding reaction before moving to the next question.
 async function generateAcknowledgement(probeQuestion, probeAnswer) {
   try {
     const response = await client.chat.completions.create({
@@ -191,16 +184,15 @@ async function generateAcknowledgement(probeQuestion, probeAnswer) {
           content: `You are a friendly UX researcher wrapping up a question in a casual conversation.
 
 The participant just answered a follow-up question. Write a SHORT, warm, natural reaction — 
-the kind of thing a real interviewer would say before moving on. Think "yeah totally", 
-"oh that makes a lot of sense", "haha fair enough", "wow that's actually really interesting" etc.
+the kind of thing a real interviewer would say before moving on.
 
 Rules:
 - 1-2 sentences MAX
-- Sound genuinely human — use casual phrases, contractions, filler words
+- Sound genuinely human — casual phrases, contractions, filler words
 - Briefly acknowledge something specific from their answer if possible
 - Do NOT ask another question
 - Do NOT say "Great answer!" or "That's great!" — too robotic
-- End on a natural note that implies you're moving on
+- End naturally, implying you're moving on
 
 Output ONLY the acknowledgement. Nothing else.`,
         },
@@ -221,6 +213,20 @@ Output ONLY the acknowledgement. Nothing else.`,
   }
 }
 
+// ─── TEXT TO SPEECH ───────────────────────────────────────────────────────────
+// Uses OpenAI TTS — returns a Buffer of mp3 audio.
+// This is used instead of browser speechSynthesis which breaks on mobile.
+async function textToSpeech(text) {
+  const response = await client.audio.speech.create({
+    model:           "tts-1",
+    voice:           "nova",   // warm, natural female voice
+    input:           text,
+    response_format: "mp3",
+    speed:           0.95,
+  });
+  return Buffer.from(await response.arrayBuffer());
+}
+
 // ─── FALLBACK ─────────────────────────────────────────────────────────────────
 function fallback() {
   return {
@@ -232,4 +238,10 @@ function fallback() {
   };
 }
 
-module.exports = { analyzeImage, transcribeAudio, generateProbe, generateAcknowledgement };
+module.exports = {
+  analyzeImage,
+  transcribeAudio,
+  generateProbe,
+  generateAcknowledgement,
+  textToSpeech,
+};
