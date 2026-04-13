@@ -1,0 +1,14 @@
+{
+  "name": "ai-backend",
+  "version": "1.0.0",
+  "dependencies": {
+    "@elevenlabs/elevenlabs-js": "^2.42.0",
+    "axios": "^1.6.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^4.22.1",
+    "fs-extra": "^11.2.0",
+    "openai": "^6.34.0",
+    "ws": "^8.20.0"
+  }
+}
